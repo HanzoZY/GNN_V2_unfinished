@@ -14,10 +14,10 @@ class GNN_FSL:
         self.lr = hparams.lr
         self.hop=hparams.hop
         self.label_cut=hparams.label_cut
-        self.l2_loss = 0
 
 
-        self.input_placeholder = tf.nn.l2_normalize(tf.cast(input_tensor, tf.float32),axis=-1)
+        # self.input_placeholder = tf.nn.l2_normalize(tf.cast(input_tensor, tf.float32),axis=-1)
+        self.input_placeholder = tf.cast(input_tensor, tf.float32)
         self.label_placeholder = label_tensor
         self.is_train = is_train
         if self.is_train:
@@ -36,27 +36,27 @@ class GNN_FSL:
         label_store=self.feed_label_one_hot_with_target
 
         '''for test only'''
-        name = 'GCN_Blocks'
-        with tf.variable_scope(name):
-            data_store, _, label_store, propagation_store ,self.diff,self.Lap,self.simi,self.cmpr= self._gcn_block(input_data=data_store,input_label=label_store,add_dim=self.num_classes, drop=False)
+        # name = 'GCN_Blocks'
+        # with tf.variable_scope(name):
+        #     data_store, _, self.diff,label_store, propagation_store ,self.Lap,self.simi,self.cmpr= self._gcn_block(input_data=data_store,input_label=label_store,add_dim=self.num_classes, drop=False)
 
 
 
 
-        # for i in range(self.num_gcn_blocks):
-        #     #是否公用相似度函数和感受野比例
-        #     # name='GCN_Blocks'
-        #     name=f"GCN_Block_{i}"
-        #     with tf.variable_scope(name):
-        #         _,data_store, label_store,_ = self._gcn_block(input_data=data_store,
-        #                                                                      input_label=label_store,
-        #                                                                      add_dim=int(self.input_dim/2), drop=False)
-        #
-        # with tf.variable_scope('last_Block'):
-        #
-        #     data_store, _,label_store, propagation_store = self._gcn_block(input_data=data_store,
-        #                                                                  input_label=label_store,
-        #                                                                  add_dim=self.num_classes, drop=False)
+        for i in range(self.num_gcn_blocks):
+            #是否公用相似度函数和感受野比例
+            # name='GCN_Blocks'
+            name=f"GCN_Block_{i}"
+            with tf.variable_scope(name):
+                _,data_store, label_store,_ = self._gcn_block(input_data=data_store,
+                                                                             input_label=label_store,
+                                                                             add_dim=int(self.input_dim/2))
+
+        with tf.variable_scope('last_Block'):
+
+            data_store, _,label_store, propagation_store = self._gcn_block(input_data=data_store,
+                                                                         input_label=label_store,
+                                                                         add_dim=self.num_classes)
         self.label_store=label_store
         if self.label_cut=='yes':
             print('use cut')
@@ -82,9 +82,9 @@ class GNN_FSL:
         # input_label: B*T*N
         # input_dim: D D=64
         # option='nn'
-        # self.Difference=Difference= self._get_Difference(input_data)
+        # self.Difference1=Difference= self._get_Difference(input_data)
 
-        Difference= self._get_Difference(input_data=input_data)
+        Difference= self._get_DifferenceV2(input_data=input_data)
         adjacency,cmpr= self._similarity_func(batch_size=self.batch_size, seq_len=self.seq_len, Difference=Difference,
                                               drop=drop, input_dim=input_data.shape[-1],option='nn')
         #修改
@@ -107,12 +107,29 @@ class GNN_FSL:
         # data_out=tf.layers.batch_normalization(inputs=data_out, axis=-1)
         # data_out = tf.nn.leaky_relu(data_out)
         data_store = tf.concat([input_data, data_out], axis=-1)
-        # return data_out, data_store, label_out, propagation  # leaky relu
-        return data_out,data_store,label_out,propagation,Difference,Laplacian,adjacency,cmpr#leaky relu
+        return data_out, data_store, label_out, propagation  # leaky relu
+        # return data_out,data_store,Difference,label_out,propagation,Laplacian,adjacency,cmpr#leaky relu
 
 
-    def _get_Difference(self,input_data):
-        return tf.nn.l2_normalize(tf.py_func(get_difference, [input_data], tf.float32),axis=-1)
+    # def _get_Difference(self,input_data):
+    #     return tf.nn.l2_normalize(tf.py_func(get_difference, [input_data], tf.float32),axis=-1)
+
+    def _get_DifferenceV2(self,input_data):
+        shape = input_data.shape
+        Difference = []
+        for i in range(shape[1]):
+            Difference_1=[]
+            for j in range(shape[1]):
+                Difference_0 = input=tf.abs(input_data[:, i, :] - input_data[:, j, :])
+                print('Difference_0:',Difference_0.shape)
+                Difference_1.append(Difference_0)
+            Difference_1=tf.stack(values=Difference_1,axis=1)
+            print('Difference_1:', Difference_1.shape)
+            Difference.append(Difference_1)
+        last_out=tf.stack(values=Difference,axis=1)
+        print('diff_v2,output:',last_out.shape)
+        return last_out
+
 
     def _similarity_func(self,batch_size,seq_len,Difference,input_dim,drop=False,option='nn'):
         #(0,0,0,...,0)->0???
@@ -155,7 +172,8 @@ class GNN_FSL:
             #     sup_similarity.append(similarity_temp)
             # last_output=tf.squeeze(tf.stack(sup_similarity, axis=1))
             similarity_temp = last_output
-            for output_dim in [128, 16, 1]:
+            input_dim=last_output.shape[-1]
+            for output_dim in [2*int(input_dim), int(input_dim)/2, 1]:
                 with tf.variable_scope(f"similarN_{output_dim}", reuse=tf.AUTO_REUSE):
                     similarity_temp = self._add_nn_block(x=similarity_temp, out_channel=output_dim)
             print('after_nn:',last_output.shape)
@@ -297,9 +315,9 @@ def _GNN_test():
     hparams = Dummy()
     hparams.n = 3
     hparams.k=1
-    hparams.input_dim = 5
-    hparams.num_gcn_blocks=0
-    hparams.batch_size = 2
+    hparams.input_dim = 10
+    hparams.num_gcn_blocks=5
+    hparams.batch_size = 20
     hparams.seq_len = hparams.n*hparams.k+1
     hparams.lr = 1e-3
     hparams.hop=1
@@ -309,8 +327,8 @@ def _GNN_test():
     with tf.Graph().as_default():
         dummy_input, dummy_label = _make_dummy_data(batch_size=hparams.batch_size,seq_len=hparams.seq_len,dim=hparams.input_dim,num_class=hparams.n,k=hparams.k)
         print(np.shape(dummy_input),np.shape(dummy_label))
-        print(dummy_input)
-        print('\n',dummy_label)
+        print('dunmmy_input:\n',dummy_input)
+        print('dummy label\n',dummy_label)
         model = GNN_FSL(hparams, tf.stack(dummy_input), tf.cast(tf.stack(dummy_label), tf.int32), True)
 
         config = tf.ConfigProto()
@@ -330,28 +348,32 @@ def _GNN_test():
             # target_label=sess.run([model.target_label])
             # print(target_label)
             time_start = time.time()
-            for i in range(10000):
+            for i in range(1000):
 
 
                 '''test only'''
-                _, train_data,loss, acc,target_label,predictlabel,propagation,diff,Lap,simi,cmpr,feed_label,label_store= sess.run([model.train_step, model.concated_input,model.loss, model.accuracy,model.target_label,model.predict_label,\
-                                                                                               model.propagation,model.diff,model.Lap,model.simi,model.cmpr,model.feed_label_one_hot_with_target,model.label_store])
+                # Df1,Df2,_, train_data,loss, acc,target_label,predictlabel,propagation,Lap,simi,cmpr,feed_label,label_store= sess.run([model.Difference1,model.Difference2,model.train_step, model.concated_input,model.loss, model.accuracy,model.target_label,model.predict_label,\
+                #                                                                                model.propagation,model.Lap,model.simi,model.cmpr,model.feed_label_one_hot_with_target,model.label_store])
 
-                # _, train_data, loss, acc, target_label, predictlabel= sess.run([model.train_step, model.concated_input, model.loss, model.accuracy, model.target_label,
-                #      model.predict_label])
+                _, train_data, loss, acc, target_label, predictlabel= sess.run([model.train_step, model.concated_input, model.loss, model.accuracy, model.target_label,
+                     model.predict_label])
 
 
-                if i%200==0:
+                if i%100==0:
+                    print('dunmmy_input:\n', dummy_input)
+                    # print('Dif1\n',Df1)
+                    # print('Dif2\n',Df2)
+                    print('dummy label\n', dummy_label)
                     print("step is ", i, "\n", loss, acc, '\n')
                     print("predict is \n",predictlabel)
                     print('target is \n',target_label)
-                    print('feed_label\n',feed_label)
-                    print('label_store',label_store)
-                    print('diff is: \n', diff, '\n')
-                    # print('compare is \n', cmpr)
-                    print('simi is', '\n', simi, '\n')
-                    print('Lap is \n',Lap)
-                    print('propagation is','\n',propagation,'\n')
+                    # print('feed_label\n',feed_label)
+                    # print('label_store',label_store)
+
+                    # # print('compare is \n', cmpr)
+                    # print('simi is', '\n', simi, '\n')
+                    # print('Lap is \n',Lap)
+                    # print('propagation is','\n',propagation,'\n')
 
 
 
